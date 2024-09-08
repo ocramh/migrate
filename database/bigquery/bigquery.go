@@ -49,6 +49,10 @@ type Config struct {
 	StmtTimeout     time.Duration
 }
 
+func (c *Config) qualifiedMigrationsTable() string {
+	return fmt.Sprintf("%s.%s", c.DatasetID, c.MigrationsTable)
+}
+
 // WithInstance is an optional function that accepts an existing DB instance, a
 // Config struct and returns a driver instance.
 func WithInstance(instance *bq.Client, config *Config) (database.Driver, error) {
@@ -175,7 +179,7 @@ func (b *BigQuery) Run(migration io.Reader) error {
 // version must be >= -1. -1 means NilVersion.
 func (b *BigQuery) SetVersion(version int, dirty bool) error {
 	stmt := fmt.Sprintf("INSERT INTO `%s` (version, dirty) VALUES (@version, @dirty)",
-		b.config.MigrationsTable,
+		b.config.qualifiedMigrationsTable(),
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), b.config.StmtTimeout)
@@ -205,7 +209,7 @@ func (b *BigQuery) SetVersion(version int, dirty bool) error {
 // Dirty means, a previous migration failed and user interaction is required.
 func (b *BigQuery) Version() (version int, dirty bool, err error) {
 	stmt := fmt.Sprintf("SELECT version, dirty FROM `%s` ORDER BY version DESC LIMIT 1",
-		b.config.MigrationsTable,
+		b.config.qualifiedMigrationsTable(),
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), b.config.StmtTimeout)
@@ -285,10 +289,10 @@ func (b *BigQuery) ensureVersionTable() (err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), b.config.StmtTimeout)
 	defer cancel()
 
-	stmt := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
+	stmt := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS`+" `%s` "+`(
     version INT64 NOT NULL,
     dirty    BOOL NOT NULL
-	)`, b.config.MigrationsTable)
+	)`, b.config.qualifiedMigrationsTable())
 
 	q := b.DB.Query(stmt)
 
