@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	nurl "net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -25,7 +24,7 @@ func init() {
 
 const (
 	DefaultMigrationsTableName = "schema_migrations"
-	DefaultStmtTimeoutSec      = 10
+	DefaultQueryTimeout        = time.Duration(10 * time.Second)
 )
 
 var (
@@ -90,9 +89,9 @@ func (b *BigQuery) Open(url string) (database.Driver, error) {
 		migrationsTable = u.Query().Get("x-migrations-table")
 	}
 
-	stmtTimeout := DefaultStmtTimeoutSec
+	stmtTimeout := DefaultQueryTimeout
 	if u.Query().Has("x-stmt-timeout") {
-		stmtTimeout, err = strconv.Atoi(u.Query().Get("x-stmt-timeout"))
+		stmtTimeout, err = time.ParseDuration(u.Query().Get("x-stmt-timeout"))
 		if err != nil {
 			return nil, err
 		}
