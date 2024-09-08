@@ -36,12 +36,15 @@ var (
 	ErrMissingConfigArg = errors.New("config is a required argument")
 )
 
+// BigQuery is a database.Driver implementation for running migrations in Big
+// Query.
 type BigQuery struct {
 	DB     *bq.Client
 	config *Config
 	lock   *uatomic.Bool
 }
 
+// Config allows to customize the BigQuery type
 type Config struct {
 	MigrationsTable string
 	DatasetID       string
@@ -109,16 +112,12 @@ func (b *BigQuery) Open(url string) (database.Driver, error) {
 		return nil, err
 	}
 
-	return &BigQuery{
-		DB: client,
-		config: &Config{
-			MigrationsTable: migrationsTable,
-			DatasetID:       datasetID,
-			GCPProjectID:    projectID,
-			StmtTimeout:     time.Duration(stmtTimeout),
-		},
-		lock: uatomic.NewBool(dbUnlocked),
-	}, nil
+	return WithInstance(client, &Config{
+		MigrationsTable: migrationsTable,
+		DatasetID:       datasetID,
+		GCPProjectID:    projectID,
+		StmtTimeout:     time.Duration(stmtTimeout),
+	})
 }
 
 // Close closes the underlying database instance managed by the driver.
@@ -153,7 +152,7 @@ func (b *BigQuery) Unlock() error {
 func (b *BigQuery) Run(migration io.Reader) error {
 	stmt, err := io.ReadAll(migration)
 	if err != nil {
-		return err
+		return &database.Error{OrigErr: err, Err: "migration failed", Query: stmt}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), b.config.StmtTimeout)
@@ -163,29 +162,36 @@ func (b *BigQuery) Run(migration io.Reader) error {
 
 	job, err := query.Run(ctx)
 	if err != nil {
-		return err
+		return &database.Error{OrigErr: err, Err: "migration failed", Query: stmt}
 	}
 
 	status, err := job.Wait(ctx)
 	if err != nil {
-		return err
+		return &database.Error{OrigErr: err, Err: "migration failed", Query: stmt}
 	}
 
-	return status.Err()
+	if status.Err() != nil {
+		return &database.Error{OrigErr: status.Err(), Err: "migration failed", Query: stmt}
+	}
+
+	return nil
 }
 
 // SetVersion saves version and dirty state.
 // Migrate will call this function before and after each call to Run.
 // version must be >= -1. -1 means NilVersion.
 func (b *BigQuery) SetVersion(version int, dirty bool) error {
-	stmt := fmt.Sprintf("INSERT INTO `%s` (version, dirty) VALUES (@version, @dirty)",
+	stmt := fmt.Sprintf(`BEGIN TRANSACTION;
+		DELETE FROM`+" `%[1]s` "+`WHERE true;
+		INSERT INTO`+" `%[1]s` "+`(version, dirty) VALUES (@version, @dirty);
+		COMMIT TRANSACTION;`,
 		b.config.qualifiedMigrationsTable(),
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), b.config.StmtTimeout)
 	defer cancel()
 
-	query := b.DB.Query(string(stmt))
+	query := b.DB.Query(stmt)
 	query.Parameters = []bq.QueryParameter{
 		{Name: "version", Value: version},
 		{Name: "dirty", Value: dirty},
@@ -193,15 +199,19 @@ func (b *BigQuery) SetVersion(version int, dirty bool) error {
 
 	job, err := query.Run(ctx)
 	if err != nil {
-		return err
+		return &database.Error{OrigErr: err, Err: "failed to set migrations version", Query: []byte(stmt)}
 	}
 
 	status, err := job.Wait(ctx)
 	if err != nil {
-		return err
+		return &database.Error{OrigErr: err, Err: "failed to set migrations version", Query: []byte(stmt)}
 	}
 
-	return status.Err()
+	if status.Err() != nil {
+		return &database.Error{OrigErr: status.Err(), Err: "failed to set migrations version", Query: []byte(stmt)}
+	}
+
+	return nil
 }
 
 // Version returns the currently active version and if the database is dirty.
@@ -215,16 +225,16 @@ func (b *BigQuery) Version() (version int, dirty bool, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), b.config.StmtTimeout)
 	defer cancel()
 
-	query := b.DB.Query(string(stmt))
+	query := b.DB.Query(stmt)
 
 	job, err := query.Run(ctx)
 	if err != nil {
-		return version, dirty, err
+		return version, dirty, &database.Error{OrigErr: err, Err: "failed to run migrations version query", Query: []byte(stmt)}
 	}
 
 	rowIter, err := job.Read(ctx)
 	if err != nil {
-		return version, dirty, err
+		return version, dirty, &database.Error{OrigErr: err, Err: "failed to read migrations version", Query: []byte(stmt)}
 	}
 
 	type versionRow struct {
@@ -235,7 +245,11 @@ func (b *BigQuery) Version() (version int, dirty bool, err error) {
 
 	err = rowIter.Next(&v)
 	if err != nil {
-		return version, dirty, err
+		if errors.Is(err, iterator.Done) {
+			return database.NilVersion, dirty, nil
+		}
+
+		return version, dirty, &database.Error{OrigErr: err, Query: []byte(stmt)}
 	}
 
 	return v.Version, v.Dirty, nil
@@ -255,12 +269,12 @@ func (b *BigQuery) Drop() error {
 		}
 
 		if err != nil {
-			return err
+			return &database.Error{OrigErr: err, Err: "failed to iterate tables to drop"}
 		}
 
 		err = table.Delete(ctx)
 		if err != nil {
-			return err
+			return &database.Error{OrigErr: err, Err: "failed to drop tables"}
 		}
 	}
 
@@ -291,19 +305,20 @@ func (b *BigQuery) ensureVersionTable() (err error) {
 
 	stmt := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS`+" `%s` "+`(
     version INT64 NOT NULL,
-    dirty    BOOL NOT NULL
+    dirty    BOOL NOT NULL,
+		PRIMARY KEY (version) NOT ENFORCED
 	)`, b.config.qualifiedMigrationsTable())
 
 	q := b.DB.Query(stmt)
 
 	job, err := q.Run(ctx)
 	if err != nil {
-		return err
+		return database.Error{OrigErr: err, Err: "failed to create migrations table"}
 	}
 
 	status, err := job.Wait(ctx)
 	if err != nil {
-		return err
+		return database.Error{OrigErr: err, Err: "failed to create migrations table"}
 	}
 
 	return status.Err()
