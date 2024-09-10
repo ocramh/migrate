@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	nurl "net/url"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/golang-migrate/migrate/v4/database"
 	"github.com/hashicorp/go-multierror"
 	uatomic "go.uber.org/atomic"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/iterator"
 	bqopt "google.golang.org/api/option"
 )
@@ -311,6 +313,21 @@ func (b *BigQuery) ensureVersionTable() (err error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), b.config.StmtTimeout)
 	defer cancel()
+
+	tableRef := b.DB.Dataset(b.config.DatasetID).Table(b.config.MigrationsTable)
+	_, err = tableRef.Metadata(ctx)
+	if err == nil {
+		// table already exist
+		return nil
+	}
+
+	if err != nil {
+		if e, ok := err.(*googleapi.Error); ok {
+			if e.Code != http.StatusNotFound {
+				return err
+			}
+		}
+	}
 
 	stmt := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS`+" `%s` "+`(
     version INT64 NOT NULL,
