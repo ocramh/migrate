@@ -317,7 +317,7 @@ func (b *BigQuery) ensureVersionTable() (err error) {
 	tableRef := b.DB.Dataset(b.config.DatasetID).Table(b.config.MigrationsTable)
 	_, err = tableRef.Metadata(ctx)
 	if err == nil {
-		// table already exist
+		// table already exists
 		return nil
 	}
 
