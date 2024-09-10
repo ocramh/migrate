@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	nurl "net/url"
 	"strings"
 	"time"
 
 	bq "cloud.google.com/go/bigquery"
+	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database"
 	"github.com/hashicorp/go-multierror"
 	uatomic "go.uber.org/atomic"
@@ -86,7 +88,7 @@ func (b *BigQuery) Open(url string) (database.Driver, error) {
 		return nil, err
 	}
 
-	projectID, datasetID, err := parseDNS(u.String())
+	projectID, datasetID, err := parseDNS(u)
 	if err != nil {
 		return nil, err
 	}
@@ -94,6 +96,15 @@ func (b *BigQuery) Open(url string) (database.Driver, error) {
 	migrationsTable := DefaultMigrationsTableName
 	if u.Query().Has("x-migrations-table") {
 		migrationsTable = u.Query().Get("x-migrations-table")
+	}
+
+	var opts []bqopt.ClientOption
+	if u.Query().Has("x-endpoint") {
+		opts = append(opts, bqopt.WithEndpoint(u.Query().Get("x-endpoint")))
+	}
+
+	if u.Query().Has("x-insecure") {
+		opts = append(opts, bqopt.WithoutAuthentication())
 	}
 
 	stmtTimeout := DefaultQueryTimeout
@@ -104,10 +115,8 @@ func (b *BigQuery) Open(url string) (database.Driver, error) {
 		}
 	}
 
-	opt := []bqopt.ClientOption{}
-
 	ctx := context.Background()
-	client, err := bq.NewClient(ctx, projectID, opt...)
+	client, err := bq.NewClient(ctx, projectID, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -305,8 +314,7 @@ func (b *BigQuery) ensureVersionTable() (err error) {
 
 	stmt := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS`+" `%s` "+`(
     version INT64 NOT NULL,
-    dirty    BOOL NOT NULL,
-		PRIMARY KEY (version) NOT ENFORCED
+    dirty    BOOL NOT NULL
 	)`, b.config.qualifiedMigrationsTable())
 
 	q := b.DB.Query(stmt)
@@ -326,11 +334,12 @@ func (b *BigQuery) ensureVersionTable() (err error) {
 
 // parseDNS returns the projectID and datasetID fragments from a URL connection
 // string like bigquery://{projectID}/{datasetID}?param=true
-func parseDNS(url string) (string, string, error) {
-	url = strings.Replace(url, "bigquery://", "", 1)
+func parseDNS(u *url.URL) (string, string, error) {
+	url := strings.Replace(migrate.FilterCustomQuery(u).String(), "bigquery://", "", 1)
+
 	fragments := strings.Split(url, "/")
 
-	if len(fragments) != 2 {
+	if len(fragments) < 2 {
 		return "", "", errors.New("invalid url format expected, bigquery://{projectID}/{datasetID}?param=true")
 	}
 
