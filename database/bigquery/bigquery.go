@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	nurl "net/url"
 	"strings"
 	"time"
@@ -351,7 +350,7 @@ func (b *BigQuery) ensureVersionTable() (err error) {
 
 // parseDNS returns the projectID and datasetID fragments from a URL connection
 // string like bigquery://{projectID}/{datasetID}?param=true
-func parseDNS(u *url.URL) (string, string, error) {
+func parseDNS(u *nurl.URL) (string, string, error) {
 	url := strings.Replace(migrate.FilterCustomQuery(u).String(), "bigquery://", "", 1)
 
 	fragments := strings.Split(url, "/")

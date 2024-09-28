@@ -9,17 +9,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	dockertypes "github.com/docker/docker/api/types"
-	dockercontainer "github.com/docker/docker/api/types/container"
-	dockernetwork "github.com/docker/docker/api/types/network"
-	dockerclient "github.com/docker/docker/client"
-	"github.com/hashicorp/go-multierror"
 	"io"
 	"math/rand"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	dockertypes "github.com/docker/docker/api/types"
+	dockercontainer "github.com/docker/docker/api/types/container"
+	dockerimage "github.com/docker/docker/api/types/image"
+	dockernetwork "github.com/docker/docker/api/types/network"
+	dockerclient "github.com/docker/docker/client"
+	"github.com/hashicorp/go-multierror"
 )
 
 func NewDockerContainer(t testing.TB, image string, env []string, cmd []string) (*DockerContainer, error) {
@@ -73,7 +75,7 @@ func (d *DockerContainer) PullImage() (err error) {
 		return errors.New("Cannot pull image on a nil *DockerContainer")
 	}
 	d.t.Logf("Docker: Pull image %v", d.ImageName)
-	r, err := d.client.ImagePull(context.Background(), d.ImageName, dockertypes.ImagePullOptions{})
+	r, err := d.client.ImagePull(context.Background(), d.ImageName, dockerimage.PullOptions{})
 	if err != nil {
 		return err
 	}
@@ -126,7 +128,7 @@ func (d *DockerContainer) Start() error {
 	d.ContainerName = containerName
 
 	// then start it
-	if err := d.client.ContainerStart(context.Background(), resp.ID, dockertypes.ContainerStartOptions{}); err != nil {
+	if err := d.client.ContainerStart(context.Background(), resp.ID, dockercontainer.StartOptions{}); err != nil {
 		return err
 	}
 
@@ -158,7 +160,7 @@ func (d *DockerContainer) Remove() error {
 		return errors.New("missing containerId")
 	}
 	if err := d.client.ContainerRemove(context.Background(), d.ContainerId,
-		dockertypes.ContainerRemoveOptions{
+		dockercontainer.RemoveOptions{
 			Force: true,
 		}); err != nil {
 		d.t.Log(err)
@@ -194,7 +196,7 @@ func (d *DockerContainer) Logs() (io.ReadCloser, error) {
 		return nil, errors.New("missing containerId")
 	}
 
-	return d.client.ContainerLogs(context.Background(), d.ContainerId, dockertypes.ContainerLogsOptions{
+	return d.client.ContainerLogs(context.Background(), d.ContainerId, dockercontainer.LogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 	})
